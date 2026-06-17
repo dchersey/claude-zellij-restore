@@ -1,0 +1,93 @@
+// clauding.kdl — example cold-start Zellij layout for use with claude-resume.
+//
+// Each Claude pane runs `claude-resume` instead of `claude`, so on startup it
+// auto-resumes the session in its folder, or shows a picker when there's more
+// than one. Replace the paths and project names below with your own, then:
+//
+//     zellij --layout clauding.kdl
+//
+// `start_suspended true` creates a pane without running its command yet; press
+// Enter in the pane to launch it. Remove it if you'd rather panes run on start.
+
+layout {
+    // Edit this to the directory that holds your projects / git worktrees.
+    cwd "/path/to/your/projects"
+
+    // ----------------------------------------------------------------------
+    // One tab per project or worktree. This first tab shows the common shape:
+    // a stacked column with a dev server + a Claude session, lazygit, a shell.
+    // ----------------------------------------------------------------------
+    tab name="project-a" hide_floating_panes=true {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        pane split_direction="vertical" {
+            pane size="35%" stacked=true {
+                // Your dev server / build watcher — adjust to taste.
+                pane command="npm" cwd="project-a" {
+                    args "run" "dev"
+                    start_suspended true
+                }
+                // The Claude Code session for this folder. `expanded=true`
+                // makes it the open pane in the stack on startup.
+                pane command="claude-resume" cwd="project-a/backend" expanded=true {
+                    start_suspended true
+                }
+            }
+            pane command="lazygit" cwd="project-a" size="30%" {
+                start_suspended true
+            }
+            // A plain shell in the repo root.
+            pane cwd="project-a" size="35%"
+        }
+        pane size=1 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // A worktree with more than one Claude session in the SAME folder.
+    // `claude --continue` can't tell those apart, so pass --pick and let
+    // claude-resume show the chooser (keyed by branch + last activity + first
+    // prompt) for each pane.
+    // ----------------------------------------------------------------------
+    tab name="project-b" focus=true hide_floating_panes=true {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        pane split_direction="vertical" {
+            pane size="60%" stacked=true {
+                pane command="claude-resume" cwd="project-b/backend" expanded=true {
+                    args "--pick"
+                    start_suspended true
+                }
+                pane command="claude-resume" cwd="project-b/backend" {
+                    args "--pick"
+                    start_suspended true
+                }
+            }
+            pane command="lazygit" cwd="project-b" size="40%" {
+                start_suspended true
+            }
+        }
+        pane size=1 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    // Template applied to any tab you open interactively afterwards.
+    new_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        pane cwd="/path/to/your/projects"
+        pane size=1 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    // Optional: Zellij ships sensible built-in swap layouts for dynamic tiling,
+    // so none are required here. Add your own `swap_tiled_layout` /
+    // `swap_floating_layout` blocks if you want custom behavior as panes are
+    // added or removed.
+}
