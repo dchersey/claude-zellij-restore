@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # clauding-snapshot — photograph the current Zellij session into a resume layout.
-# Rewrites every live `command="claude"` pane into a `claude-resume --id <id>`
-# pane, resolving each id from the most-recently-active transcripts in that
-# pane's cwd. Geometry, plugin/status panes, floating panes, swap layouts and
-# all non-claude command panes pass through byte-for-byte.
+# Rewrites every live claude pane into a `claude-resume --id <id>` pane, resolving
+# each id from the live session registry (~/.claude/sessions/<pid>.json), scoped to
+# the current zellij window. Also recovers "stealth" claude panes that zellij
+# mislabeled with a claude-spawned child command (e.g. an MCP server / caffeinate).
+# Geometry, plugins, floating/swap layouts and other command panes pass through
+# byte-for-byte (use --run-all to auto-start those instead of leaving them suspended).
 #
-#   clauding-snapshot                 dump current session -> ./clauding-resume.kdl
+#   clauding-snapshot                 dump current session -> ~/tmp/clauding-restore.kdl
 #   clauding-snapshot -o FILE         choose output path
 #   clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
-#   clauding-snapshot --suspend       keep panes start_suspended (Enter to resume each)
+#   clauding-snapshot --suspend       keep claude panes start_suspended (Enter to resume each)
+#   clauding-snapshot --run-all       also auto-run non-claude command panes (strip start_suspended)
 set -eu
-out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0
+out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
 while [ $# -gt 0 ]; do case "$1" in
   -o) shift; out="$1";;
   --from) shift; src="$1";;
   --suspend) suspend=1;;
+  --run-all) run_all=1;;
   *) echo "clauding-snapshot: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
 
@@ -24,10 +28,11 @@ if [ -n "$src" ]; then cp "$src" "$tmp"; else zellij action dump-layout > "$tmp"
 mkdir -p "$(dirname "$out")"
 
 RESUME_BIN="${CLAUDE_RESUME_BIN:-$(command -v claude-resume 2>/dev/null || echo "$HOME/bin/claude-resume")}"
-SUSPEND="$suspend" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
+SUSPEND="$suspend" RUN_ALL="$run_all" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
 import sys, os, re, glob, json, subprocess
 dump = open(sys.argv[1]).read().split('\n')
 proj = os.environ["PROJ"]; keep_suspend = os.environ["SUSPEND"] == "1"
+run_all = os.environ.get("RUN_ALL") == "1"
 resume_bin = os.environ["RESUME_BIN"]
 
 def encode(c): return re.sub(r'[^A-Za-z0-9]', '-', c)
@@ -117,41 +122,79 @@ def absci(c):
     return c if c.startswith('/') else os.path.normpath(os.path.join(gcwd, c))
 
 is_claude = re.compile(r'command="claude"(?!-)')   # exact claude, not claude-resume
+cmd_re    = re.compile(r'command="([^"]*)"')
 cwd_re    = re.compile(r'cwd="([^"]*)"')
+
+def pane_cwd(ln):
+    raw = cwd_re.search(ln); return absci(raw.group(1)) if raw else gcwd
+
+# Pre-scan per cwd: count claude-bound panes (exact `claude`, or already
+# `claude-resume`) vs other command panes. A "stealth" claude pane is one zellij
+# mislabeled with a claude-spawned child command (an MCP server, caffeinate, ...).
+# We recover it only when its cwd has an unbound live claude session AND it is the
+# sole other command pane there — so a real dev-server pane is never clobbered.
+claude_cmd_count, other_cmd_count = {}, {}
+for ln in dump:
+    if 'pane' not in ln or not cmd_re.search(ln): continue
+    cwd = pane_cwd(ln)
+    if is_claude.search(ln) or 'claude-resume' in ln or resume_bin in ln:
+        claude_cmd_count[cwd] = claude_cmd_count.get(cwd, 0) + 1
+    else:
+        other_cmd_count[cwd] = other_cmd_count.get(cwd, 0) + 1
+
+def is_stealth_claude(cwd):
+    # Recover masked claude panes only when the cwd's mystery command panes all fit
+    # within its unbound live claude sessions (count(other) <= unbound). If there are
+    # more command panes than unbound sessions we can't tell which are claude, so we
+    # bail (never clobber a real dev-server pane).
+    unbound = len(live_ids(cwd)) - claude_cmd_count.get(cwd, 0)
+    return unbound > 0 and other_cmd_count.get(cwd, 0) <= unbound
+
+def gather_block(start):
+    depth, j, inner, close = 1, start + 1, [], None
+    while j < len(dump) and depth > 0:
+        b = dump[j]; depth += b.count('{') - b.count('}')
+        if depth > 0: inner.append(b)
+        else: close = b
+        j += 1
+    return inner, close, j
+
 report = []
 out, i = [], 0
 while i < len(dump):
     ln = dump[i]
-    if 'pane' in ln and is_claude.search(ln):
-        indent = re.match(r'\s*', ln).group(0)
-        raw = cwd_re.search(ln); cwd = absci(raw.group(1)) if raw else gcwd
-        opener = is_claude.sub(lambda m: 'command="%s"' % resume_bin, ln)
-        opener = re.sub(r'\s+name="cc:[^"]*"', '', opener)
-        sid = take(cwd)
-        src = 'live' if (sid and sid in live_ids(cwd)) else ('mtime' if sid else 'pick')
-        report.append((cwd, sid, src))
-        # gather the brace block
-        if ln.rstrip().endswith('{'):
-            depth, j, inner, close = 1, i+1, [], None
-            while j < len(dump) and depth > 0:
-                b = dump[j]; depth += b.count('{') - b.count('}')
-                if depth > 0: inner.append(b)
-                else: close = b
-                j += 1
-            kept = [b for b in inner
-                    if 'args' not in b and ('start_suspended' not in b or keep_suspend)]
-            out.append(opener)
-            if sid: out.append(f'{indent}    args "--id" "{sid}"')
-            else:   out.append(f'{indent}    args "--pick"')   # pool exhausted -> pick
-            out.extend(kept)
-            out.append(close)
+    cm = cmd_re.search(ln) if 'pane' in ln else None
+    if cm:
+        cwd = pane_cwd(ln)
+        claude_here = bool(is_claude.search(ln))
+        is_resume = 'claude-resume' in ln or resume_bin in ln
+        stealth = (not claude_here) and (not is_resume) and is_stealth_claude(cwd)
+        if claude_here or stealth:
+            indent = re.match(r'\s*', ln).group(0)
+            opener = cmd_re.sub('command="%s"' % resume_bin, ln, count=1)
+            opener = re.sub(r'\s+name="cc:[^"]*"', '', opener)
+            sid = take(cwd)
+            if claude_here:
+                src = 'live' if (sid and sid in live_ids(cwd)) else ('mtime' if sid else 'pick')
+            else:
+                src = 'stealth' if sid else 'pick'
+            report.append((cwd, sid, src))
+            arg = f'{indent}    args "--id" "{sid}"' if sid else f'{indent}    args "--pick"'
+            if ln.rstrip().endswith('{'):
+                inner, close, j = gather_block(i)
+                kept = [b for b in inner
+                        if 'args' not in b and ('start_suspended' not in b or keep_suspend)]
+                out.append(opener); out.append(arg); out.extend(kept); out.append(close)
+                i = j; continue
+            else:
+                out.append(opener.rstrip() + ' {'); out.append(arg); out.append(f'{indent}}}')
+                i += 1; continue
+        elif run_all and (not is_resume) and ln.rstrip().endswith('{'):
+            # genuine non-claude command pane: drop start_suspended so it auto-runs
+            inner, close, j = gather_block(i)
+            kept = [b for b in inner if 'start_suspended' not in b]
+            out.append(ln); out.extend(kept); out.append(close)
             i = j; continue
-        else:
-            base = opener.rstrip()
-            out.append(base + ' {')
-            out.append(f'{indent}    args "--id" "{sid}"' if sid else f'{indent}    args "--pick"')
-            out.append(f'{indent}}}')
-            i += 1; continue
     out.append(ln); i += 1
 
 hdr = "// generated by clauding-snapshot — launch with: zellij --layout <thisfile>\n"
