@@ -12,15 +12,36 @@
 #   clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 #   clauding-snapshot --suspend       keep claude panes start_suspended (Enter to resume each)
 #   clauding-snapshot --run-all       also auto-run non-claude command panes (strip start_suspended)
+#   clauding-snapshot --no-stealth    trust dump-layout; skip the MCP-masking recovery heuristic
+#                                     (also via CLAUDING_NO_STEALTH=1, or automatically on a zellij
+#                                      release that includes the dump-layout fix — see below)
 set -eu
 out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
+no_stealth=0; [ -n "${CLAUDING_NO_STEALTH:-}" ] && no_stealth=1
 while [ $# -gt 0 ]; do case "$1" in
   -o) shift; out="$1";;
   --from) shift; src="$1";;
   --suspend) suspend=1;;
   --run-all) run_all=1;;
+  --no-stealth) no_stealth=1;;
   *) echo "clauding-snapshot: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
+
+# Stealth recovery works around a zellij bug where `dump-layout` reports a pane's
+# child process (e.g. an MCP server) instead of the pane's own command, so a
+# `claude` pane can't be recognized. It's a safe superset: when dump-layout is
+# correct it finds nothing to recover and is a no-op. Once the fix ships in a
+# tagged zellij release, set DUMP_LAYOUT_FIXED_VERSION to it and the script will
+# trust dump-layout (skip the heuristic) automatically on >= that version. Empty
+# = gate disabled. See https://github.com/zellij-org/zellij/pull/5285
+DUMP_LAYOUT_FIXED_VERSION=""
+if [ "$no_stealth" -eq 0 ] && [ -n "$DUMP_LAYOUT_FIXED_VERSION" ]; then
+  zv="$(zellij --version 2>/dev/null | awk '{print $2}')"
+  if [ -n "$zv" ] && \
+     [ "$(printf '%s\n%s\n' "$DUMP_LAYOUT_FIXED_VERSION" "$zv" | sort -V | head -n1)" = "$DUMP_LAYOUT_FIXED_VERSION" ]; then
+    no_stealth=1
+  fi
+fi
 
 cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; proj="$cfg/projects"
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
@@ -28,11 +49,12 @@ if [ -n "$src" ]; then cp "$src" "$tmp"; else zellij action dump-layout > "$tmp"
 mkdir -p "$(dirname "$out")"
 
 RESUME_BIN="${CLAUDE_RESUME_BIN:-$(command -v claude-resume 2>/dev/null || echo "$HOME/bin/claude-resume")}"
-SUSPEND="$suspend" RUN_ALL="$run_all" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
+SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
 import sys, os, re, glob, json, subprocess
 dump = open(sys.argv[1]).read().split('\n')
 proj = os.environ["PROJ"]; keep_suspend = os.environ["SUSPEND"] == "1"
 run_all = os.environ.get("RUN_ALL") == "1"
+no_stealth = os.environ.get("NO_STEALTH") == "1"
 resume_bin = os.environ["RESUME_BIN"]
 
 def encode(c): return re.sub(r'[^A-Za-z0-9]', '-', c)
@@ -168,7 +190,7 @@ while i < len(dump):
         cwd = pane_cwd(ln)
         claude_here = bool(is_claude.search(ln))
         is_resume = 'claude-resume' in ln or resume_bin in ln
-        stealth = (not claude_here) and (not is_resume) and is_stealth_claude(cwd)
+        stealth = (not no_stealth) and (not claude_here) and (not is_resume) and is_stealth_claude(cwd)
         if claude_here or stealth:
             indent = re.match(r'\s*', ln).group(0)
             opener = cmd_re.sub('command="%s"' % resume_bin, ln, count=1)
