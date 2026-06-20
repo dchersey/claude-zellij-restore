@@ -16,6 +16,7 @@
 #   clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 #   clauding-snapshot --suspend       keep claude panes start_suspended (Enter to resume each)
 #   clauding-snapshot --run-all       also auto-run non-claude command panes (strip start_suspended)
+#                                     (or set CLAUDING_RUN_ALL=1 to make it the default)
 #   clauding-snapshot --keep-swap-layouts  keep zellij's swap_*_layout blocks (restored layout may
 #                                     reflow to a generic swap layout when you close a pane)
 #   clauding-snapshot --no-stealth    trust dump-layout; skip the MCP-masking recovery heuristic
@@ -23,6 +24,7 @@
 #                                      release that includes the dump-layout fix — see below)
 set -eu
 out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
+[ -n "${CLAUDING_RUN_ALL:-}" ] && run_all=1
 no_stealth=0; [ -n "${CLAUDING_NO_STEALTH:-}" ] && no_stealth=1
 keep_swap=0; [ -n "${CLAUDING_KEEP_SWAP_LAYOUTS:-}" ] && keep_swap=1
 while [ $# -gt 0 ]; do case "$1" in
