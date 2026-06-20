@@ -227,7 +227,9 @@ while i < len(dump):
             block = ln.rstrip().endswith('{')
             inner, close, j = gather_block(i) if block else ([], None, i + 1)
             if is_self_runner(ln, inner):
+                # plain shell, and don't let the launcher grab focus on restore
                 opener = re.sub(r'\s+command="[^"]*"', '', ln, count=1)
+                opener = re.sub(r'\s+focus=(?:true|false)\b', '', opener)
                 out.append(opener)
                 if block:
                     out.extend(b for b in inner
