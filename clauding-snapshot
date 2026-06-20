@@ -4,25 +4,33 @@
 # each id from the live session registry (~/.claude/sessions/<pid>.json), scoped to
 # the current zellij window. Also recovers "stealth" claude panes that zellij
 # mislabeled with a claude-spawned child command (e.g. an MCP server / caffeinate).
-# Geometry, plugins, floating/swap layouts and other command panes pass through
-# byte-for-byte (use --run-all to auto-start those instead of leaving them suspended).
+# Geometry, plugins, floating panes and other command panes pass through
+# byte-for-byte (use --run-all to auto-start those instead of leaving them
+# suspended). The default swap_tiled/floating_layout blocks are dropped: in a
+# *restore* layout they make zellij snap the restored arrangement to a generic
+# swap layout the first time you close a pane (auto_layout=true), fragmenting it.
+# Keep them with --keep-swap-layouts (or CLAUDING_KEEP_SWAP_LAYOUTS=1).
 #
 #   clauding-snapshot                 dump current session -> ~/tmp/clauding-restore.kdl
 #   clauding-snapshot -o FILE         choose output path
 #   clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 #   clauding-snapshot --suspend       keep claude panes start_suspended (Enter to resume each)
 #   clauding-snapshot --run-all       also auto-run non-claude command panes (strip start_suspended)
+#   clauding-snapshot --keep-swap-layouts  keep zellij's swap_*_layout blocks (restored layout may
+#                                     reflow to a generic swap layout when you close a pane)
 #   clauding-snapshot --no-stealth    trust dump-layout; skip the MCP-masking recovery heuristic
 #                                     (also via CLAUDING_NO_STEALTH=1, or automatically on a zellij
 #                                      release that includes the dump-layout fix — see below)
 set -eu
 out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
 no_stealth=0; [ -n "${CLAUDING_NO_STEALTH:-}" ] && no_stealth=1
+keep_swap=0; [ -n "${CLAUDING_KEEP_SWAP_LAYOUTS:-}" ] && keep_swap=1
 while [ $# -gt 0 ]; do case "$1" in
   -o) shift; out="$1";;
   --from) shift; src="$1";;
   --suspend) suspend=1;;
   --run-all) run_all=1;;
+  --keep-swap-layouts) keep_swap=1;;
   --no-stealth) no_stealth=1;;
   *) echo "clauding-snapshot: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
@@ -49,13 +57,15 @@ if [ -n "$src" ]; then cp "$src" "$tmp"; else zellij action dump-layout > "$tmp"
 mkdir -p "$(dirname "$out")"
 
 RESUME_BIN="${CLAUDE_RESUME_BIN:-$(command -v claude-resume 2>/dev/null || echo "$HOME/bin/claude-resume")}"
-SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
+SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" KEEP_SWAP="$keep_swap" SELF="$(basename "$0")" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
 import sys, os, re, glob, json, subprocess
 dump = open(sys.argv[1]).read().split('\n')
 proj = os.environ["PROJ"]; keep_suspend = os.environ["SUSPEND"] == "1"
 run_all = os.environ.get("RUN_ALL") == "1"
 no_stealth = os.environ.get("NO_STEALTH") == "1"
+keep_swap = os.environ.get("KEEP_SWAP") == "1"
 resume_bin = os.environ["RESUME_BIN"]
+self_name = os.environ.get("SELF", "clauding-snapshot")  # this script's own basename
 
 def encode(c): return re.sub(r'[^A-Za-z0-9]', '-', c)
 
@@ -150,6 +160,19 @@ cwd_re    = re.compile(r'cwd="([^"]*)"')
 def pane_cwd(ln):
     raw = cwd_re.search(ln); return absci(raw.group(1)) if raw else gcwd
 
+# A pane that runs THIS script (e.g. the floating launcher that happened to be
+# running clauding-snapshot when the session was captured). On restore we don't
+# want it to re-run the snapshotter — we replace it with a plain shell. Match a
+# pane whose command IS the script, or a shell whose args invoke it.
+_shells = {'bash', 'sh', 'zsh', 'fish', 'dash', 'ksh'}
+def is_self_runner(opener, inner):
+    m = cmd_re.search(opener)
+    if not m: return False
+    base = os.path.basename(m.group(1))
+    if self_name and self_name in base: return True
+    if base in _shells: return any(self_name in b for b in inner if 'args' in b)
+    return False
+
 # Pre-scan per cwd: count claude-bound panes (exact `claude`, or already
 # `claude-resume`) vs other command panes. A "stealth" claude pane is one zellij
 # mislabeled with a claude-spawned child command (an MCP server, caffeinate, ...).
@@ -182,12 +205,35 @@ def gather_block(start):
     return inner, close, j
 
 report = []
+report_self = 0
 out, i = [], 0
 while i < len(dump):
     ln = dump[i]
+    # Drop swap_tiled_layout / swap_floating_layout blocks. In a *restore* layout
+    # they make zellij snap the restored arrangement to a generic swap layout the
+    # first time a pane is closed (auto_layout -> relayout_tiled_panes); with no
+    # swap layouts, closing a pane just reflows locally and stays put.
+    if (not keep_swap) and ln.rstrip().endswith('{') \
+       and re.match(r'\s*(swap_tiled_layout|swap_floating_layout)\b', ln):
+        _inner, _close, i = gather_block(i)
+        continue
     cm = cmd_re.search(ln) if 'pane' in ln else None
     if cm:
         cwd = pane_cwd(ln)
+        # Replace a pane that runs this snapshotter with a plain shell: drop the
+        # command/args/start_suspended, keep the geometry & other attributes.
+        cbase = os.path.basename(cm.group(1))
+        if (self_name in cbase) or (cbase in _shells):
+            block = ln.rstrip().endswith('{')
+            inner, close, j = gather_block(i) if block else ([], None, i + 1)
+            if is_self_runner(ln, inner):
+                opener = re.sub(r'\s+command="[^"]*"', '', ln, count=1)
+                out.append(opener)
+                if block:
+                    out.extend(b for b in inner
+                               if 'args' not in b and 'start_suspended' not in b)
+                    out.append(close)
+                report_self += 1; i = j; continue
         claude_here = bool(is_claude.search(ln))
         is_resume = 'claude-resume' in ln or resume_bin in ln
         stealth = (not no_stealth) and (not claude_here) and (not is_resume) and is_stealth_claude(cwd)
@@ -223,6 +269,8 @@ hdr = "// generated by clauding-snapshot — launch with: zellij --layout <thisf
 sys.stdout.write(hdr + '\n'.join(out))
 # summary to stderr
 sys.stderr.write("clauding-snapshot: rewrote %d claude pane(s)\n" % len(report))
+if report_self:
+    sys.stderr.write("  + replaced %d clauding-snapshot launcher pane(s) with a plain shell\n" % report_self)
 for cwd in sorted(set(c for c, _s, _src in report)):
     items = [(s, src) for c, s, src in report if c == cwd]
     rendered = ", ".join(("%s[%s]" % (s[:8], src) if s else "PICK") for s, src in items)
