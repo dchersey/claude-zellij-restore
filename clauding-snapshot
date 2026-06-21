@@ -16,7 +16,8 @@
 #   clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 #   clauding-snapshot --suspend       keep claude panes start_suspended (Enter to resume each)
 #   clauding-snapshot --run-all       also auto-run non-claude command panes (strip start_suspended)
-#                                     (or set CLAUDING_RUN_ALL=1 to make it the default)
+#                                     (or set CLAUDING_RUN_ALL=1 to make it the default; MCP-server
+#                                      commands are always kept suspended, never auto-run standalone)
 #   clauding-snapshot --keep-swap-layouts  keep zellij's swap_*_layout blocks (restored layout may
 #                                     reflow to a generic swap layout when you close a pane)
 #   clauding-snapshot --no-stealth    trust dump-layout; skip the MCP-masking recovery heuristic
@@ -175,6 +176,17 @@ def is_self_runner(opener, inner):
     if base in _shells: return any(self_name in b for b in inner if 'args' in b)
     return False
 
+# MCP servers are child processes claude spawns, never standalone panes. If one
+# ever shows up as a command pane (e.g. a masked claude pane from a pre-#5285
+# dump that stealth couldn't recover), --run-all must NOT auto-run it. Match on
+# the command + args only (not cwd), so a project path containing "mcp" is safe.
+_mcp_re = re.compile(r'mcp|modelcontextprotocol', re.IGNORECASE)
+def looks_like_mcp(opener, inner):
+    m = cmd_re.search(opener)
+    cmd = m.group(1) if m else ''
+    args_text = ' '.join(b for b in inner if 'args' in b)
+    return bool(_mcp_re.search(cmd + ' ' + args_text))
+
 # Pre-scan per cwd: count claude-bound panes (exact `claude`, or already
 # `claude-resume`) vs other command panes. A "stealth" claude pane is one zellij
 # mislabeled with a claude-spawned child command (an MCP server, caffeinate, ...).
@@ -262,10 +274,15 @@ while i < len(dump):
                 out.append(opener.rstrip() + ' {'); out.append(arg); out.append(f'{indent}}}')
                 i += 1; continue
         elif run_all and (not is_resume) and ln.rstrip().endswith('{'):
-            # genuine non-claude command pane: drop start_suspended so it auto-runs
+            # genuine non-claude command pane: drop start_suspended so it auto-runs,
+            # UNLESS it looks like an MCP server (claude's child) — keep those
+            # suspended so run-all never launches one standalone.
             inner, close, j = gather_block(i)
-            kept = [b for b in inner if 'start_suspended' not in b]
-            out.append(ln); out.extend(kept); out.append(close)
+            if looks_like_mcp(ln, inner):
+                out.append(ln); out.extend(inner); out.append(close)
+            else:
+                kept = [b for b in inner if 'start_suspended' not in b]
+                out.append(ln); out.extend(kept); out.append(close)
             i = j; continue
     out.append(ln); i += 1
 
