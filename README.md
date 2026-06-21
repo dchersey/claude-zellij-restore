@@ -1,5 +1,8 @@
 # claude-resume + clauding-snapshot
 
+[![CI](https://github.com/dchersey/claude-zellij-restore/actions/workflows/ci.yml/badge.svg)](https://github.com/dchersey/claude-zellij-restore/actions/workflows/ci.yml)
+[![License: Source Available](https://img.shields.io/badge/license-Source%20Available%20(MIT%20%2B%20Commons%20Clause)-blue.svg)](LICENSE)
+
 Restore a whole screenful of [Claude Code](https://docs.claude.com/en/docs/claude-code) sessions — exactly where you left them — after a reboot, inside a [Zellij](https://zellij.dev) layout.
 
 If you run many parallel Claude Code sessions across git worktrees (often several in the *same* folder), `claude --continue` can't help you: it only knows "most recent in this directory," so it can't tell your six sessions apart, and a reboot scatters all of them. These two scripts fix that. One resumes a session by its real id; the other photographs your live Zellij session into a layout file that brings every pane back, resumed, with no keystrokes.
@@ -151,6 +154,17 @@ The environment and flags applied at launch (`CLAUDE_ENV`, `CLAUDE_FLAGS`) are e
 
 ---
 
+## Why this license?
+
+Claude Zellij Restore is free to use, modify, and share for any **noncommercial** purpose —
+personal use, hobby projects, tinkering, learning, and contributions back are all
+welcome and always will be. The one thing the license doesn't permit is **selling**
+the software (or charging for hosting/support whose value comes mainly from it).
+
+I built this to solve my own problem and I'm happy to share it freely; I just don't
+want it repackaged and sold out from under the people it's meant to help. If you
+have a commercial use in mind, get in touch and we can sort something out.
+
 ## License
 
-MIT — see `LICENSE`. (Add the file before publishing; MIT is a reasonable default for a small tool like this, but pick whatever suits you.)
+Source-available under the **MIT License with the Commons Clause** — free to use, modify, and redistribute for any **noncommercial** purpose; you may not sell the software. See [LICENSE](LICENSE).
