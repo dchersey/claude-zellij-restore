@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash syntax + shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck >/dev/null
+          rc=0
+          for f in claude-resume clauding-snapshot; do
+            [ -f "$f" ] || continue
+            bash -n "$f" || rc=1
+            shellcheck -S error "$f" || rc=1
+          done
+          exit $rc
