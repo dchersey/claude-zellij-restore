@@ -120,7 +120,12 @@ same name. Run it from a plain terminal, outside zellij (detach first with `Ctrl
 ```sh
 zellij_restore.sh             # the most recent snapshot
 zellij_restore.sh <session>   # a specific session
+zellij_restore.sh --run-all   # also auto-run command panes, not just claude
 ```
+
+`--run-all` (plus `--suspend` / `--keep-swap-layouts` / `--no-stealth`) is passed
+through to `clauding-snapshot --from`, which re-shapes the saved layout before launch
+— so a snapshot taken with command panes suspended can be restored with them running.
 
 This pairs with per-session snapshots like `clauding-snapshot -o ~/tmp/clauding-restore-$ZELLIJ_SESSION_NAME.kdl` (e.g. the [claude-watch](https://github.com/dchersey/claude-code-notify-watch) auto-snapshot hook), so each session restores independently.
 
