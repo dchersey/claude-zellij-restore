@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# zellij_restore.sh — restore a zellij session from its clauding-snapshot layout.
+# zellij_restore — restore a zellij session from its clauding-snapshot layout.
 #
 # Finds the latest ~/tmp/clauding-restore-<session>.kdl (written by clauding-snapshot
 # — e.g. via the claude-watch auto-snapshot hook), derives the session name from the
@@ -9,13 +9,13 @@ set -uo pipefail
 
 usage() {
   cat <<'EOF'
-zellij_restore.sh — restore a zellij session from its clauding-snapshot layout.
+zellij_restore — restore a zellij session from its clauding-snapshot layout.
 Run from OUTSIDE zellij (detach first: Ctrl-q).
 
-  zellij_restore.sh                 restore the most recent snapshot
-  zellij_restore.sh <session>       restore a specific session's snapshot
-  zellij_restore.sh -y              skip the confirmation prompt
-  zellij_restore.sh --run-all       also auto-run non-claude command panes
+  zellij_restore                 restore the most recent snapshot
+  zellij_restore <session>       restore a specific session's snapshot
+  zellij_restore -y              skip the confirmation prompt
+  zellij_restore --run-all       also auto-run non-claude command panes
 
 --run-all / --suspend / --keep-swap-layouts / --no-stealth are passed through to
 `clauding-snapshot --from` to re-shape the saved layout before launching — so the
@@ -92,5 +92,18 @@ fi
 # entry, so the relaunch builds fresh from our layout instead of resurrecting it.
 zellij delete-session --force "$session" 2>/dev/null || true
 
-# Relaunch under the same name with the (possibly re-shaped) layout (replaces this process).
-exec zellij --session "$session" --layout "$launch"
+# The kill is async — a dying server can re-serialize its session a beat later,
+# which would make the relaunch refuse ("name exists, but is dead"). Wait until the
+# name is truly gone from the session list (active or resurrectable), up to ~2s.
+for _ in 1 2 3 4 5 6 7 8; do
+  zellij list-sessions --no-formatting --short 2>/dev/null | grep -qx "$session" || break
+  zellij delete-session --force "$session" >/dev/null 2>&1 || true
+  sleep 0.25
+done
+
+# Relaunch under the same name with the saved layout (replaces this process).
+# Use --new-session-with-layout, NOT --layout: with --session set, `--layout` routes
+# the layout as *new tabs for an existing session* (zellij main.rs) and aborts with
+# "There is no active session!" since we just deleted it. --new-session-with-layout
+# always starts a fresh session while still honoring the --session name.
+exec zellij --session "$session" --new-session-with-layout "$launch"

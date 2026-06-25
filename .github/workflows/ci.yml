@@ -17,7 +17,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck >/dev/null
           rc=0
-          for f in claude-resume clauding-snapshot; do
+          for f in claude-resume clauding-snapshot zellij_restore; do
             [ -f "$f" ] || continue
             bash -n "$f" || rc=1
             shellcheck -S error "$f" || rc=1
