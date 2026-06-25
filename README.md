@@ -36,6 +36,7 @@ clauding-snapshot
 |------|------------|
 | `claude-resume` | Resume one Claude Code session for a directory — by picker, by latest, or by exact id. Bakes your launch line in one place. |
 | `clauding-snapshot` | Capture the current Zellij session into a `*.kdl` layout that restores every Claude pane to its session. |
+| `zellij_restore.sh` | Restore from the latest `clauding-restore-<session>.kdl`: derive the session name, remove the old session, relaunch with the saved layout under the same name. |
 | `clauding.kdl` | A cold-start Zellij layout whose Claude panes call `claude-resume` (edit to match your own arrangement). |
 | `clauding-resume.example.kdl` | A sample of what `clauding-snapshot` emits, with placeholder session ids. |
 
@@ -111,6 +112,17 @@ clauding-snapshot: wrote /Users/you/tmp/clauding-restore.kdl
 To restore after reboot, run:
     zellij --layout "/Users/you/tmp/clauding-restore.kdl"
 ```
+
+Or let **`zellij_restore.sh`** do it — it finds the latest
+`clauding-restore-<session>.kdl`, removes the old session, and relaunches under the
+same name. Run it from a plain terminal, outside zellij (detach first with `Ctrl-q`):
+
+```sh
+zellij_restore.sh             # the most recent snapshot
+zellij_restore.sh <session>   # a specific session
+```
+
+This pairs with per-session snapshots like `clauding-snapshot -o ~/tmp/clauding-restore-$ZELLIJ_SESSION_NAME.kdl` (e.g. the [claude-watch](https://github.com/dchersey/claude-code-notify-watch) auto-snapshot hook), so each session restores independently.
 
 ---
 
