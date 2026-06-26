@@ -106,8 +106,10 @@ Claude leaves you at that prompt instead of a normal terminal.
 `--drop-to-shell` fixes this: instead of `exec`-ing Claude (which makes Claude *be* the
 pane's command), it runs Claude as a child and then `exec`s an interactive login shell
 (`$SHELL`, falling back to `/bin/zsh`). So when you quit Claude the pane lands in a
-fresh shell — and only when you exit *that* shell does the held prompt appear.
-`clauding-snapshot` bakes this in by default (disable with `--no-drop-shell`).
+fresh shell. `clauding-snapshot` bakes this in by default (disable with `--no-drop-shell`)
+and pairs it with `close_on_exit true` on the pane, so exiting that shell closes the pane
+cleanly. Net result: a restored pane behaves like a normal shell pane — **quit Claude →
+shell, exit shell → pane closes** — and never shows the held command-pane prompt.
 
 ### The launch line lives in one place
 
@@ -140,7 +142,7 @@ clauding-snapshot -o FILE         choose the output path
 clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 clauding-snapshot --suspend       keep panes start_suspended (press Enter to resume each)
 clauding-snapshot --no-effort     don't bake per-pane --effort into the layout
-clauding-snapshot --no-drop-shell restored claude panes don't drop to a shell on exit
+clauding-snapshot --no-drop-shell restored claude panes keep zellij's held prompt on exit
 ```
 
 It creates the output directory if needed, prints a per-directory summary of which session each pane was bound to, and ends with the exact restore command:
@@ -179,12 +181,15 @@ global default. Panes with no recorded effort fall back to that default; ultraco
 record as `xhigh` and restore there (there is no `--effort ultracode`). Disable the whole
 behavior with `--no-effort` (or `CLAUDING_NO_EFFORT=1`).
 
-### Exiting a restored pane drops to a shell
+### Exiting a restored pane drops to a shell, then closes
 
-Restored Claude panes get `--drop-to-shell` baked in by default, so quitting Claude
-lands you in a normal shell instead of zellij's held `<ENTER> re-run / <ESC> drop to
-shell` command-pane prompt (see [Dropping to a shell on exit](#dropping-to-a-shell-on-exit)).
-Disable with `--no-drop-shell` (or `CLAUDING_NO_DROP_SHELL=1`).
+Restored Claude panes get `--drop-to-shell` **plus** `close_on_exit true` baked in by
+default, so they behave like normal shell panes: quitting Claude drops you into a shell,
+and exiting that shell closes the pane — never zellij's held `<ENTER> re-run / <ESC> drop
+to shell` command-pane prompt (see
+[Dropping to a shell on exit](#dropping-to-a-shell-on-exit)). Disable the whole behavior
+with `--no-drop-shell` (or `CLAUDING_NO_DROP_SHELL=1`), which restores the classic held
+command pane.
 
 ---
 

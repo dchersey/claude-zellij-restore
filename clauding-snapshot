@@ -288,6 +288,12 @@ while i < len(dump):
                 src = 'stealth' if sid else 'pick'
             report.append((cwd, sid, src, eff))
             ds = ' "--drop-to-shell"' if drop_shell else ''
+            # With drop-to-shell, also close the pane when that shell exits
+            # (close_on_exit true -> hold_on_close=false), so the restored pane behaves
+            # like a normal shell pane: quit claude -> shell, exit shell -> pane closes,
+            # never zellij's held "re-run / drop to shell" command-pane prompt. Coupled to
+            # drop_shell so --no-drop-shell restores the classic held-pane behavior.
+            coe = f'{indent}    close_on_exit true' if drop_shell else None
             if sid:
                 arg = f'{indent}    args "--id" "{sid}"' + (f' "--effort" "{eff}"' if eff else '') + ds
             else:
@@ -295,11 +301,16 @@ while i < len(dump):
             if ln.rstrip().endswith('{'):
                 inner, close, j = gather_block(i)
                 kept = [b for b in inner
-                        if 'args' not in b and ('start_suspended' not in b or keep_suspend)]
-                out.append(opener); out.append(arg); out.extend(kept); out.append(close)
+                        if 'args' not in b and 'close_on_exit' not in b
+                        and ('start_suspended' not in b or keep_suspend)]
+                out.append(opener); out.append(arg)
+                if coe: out.append(coe)
+                out.extend(kept); out.append(close)
                 i = j; continue
             else:
-                out.append(opener.rstrip() + ' {'); out.append(arg); out.append(f'{indent}}}')
+                out.append(opener.rstrip() + ' {'); out.append(arg)
+                if coe: out.append(coe)
+                out.append(f'{indent}}}')
                 i += 1; continue
         elif run_all and (not is_resume) and ln.rstrip().endswith('{'):
             # genuine non-claude command pane: drop start_suspended so it auto-runs,
