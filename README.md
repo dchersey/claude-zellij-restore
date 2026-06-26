@@ -18,7 +18,22 @@ chmod +x ~/bin/claude-resume ~/bin/clauding-snapshot ~/bin/zellij_restore
 
 # cold start your standard layout
 zellij --layout clauding.kdl
+```
 
+> **Tip — symlink instead of copy if you'll be updating.** `cp` installs a frozen
+> snapshot, so after a `git pull` (or local edits) the copies in `~/bin` go *stale* and
+> you'll be running old behavior without noticing. Symlink them so `~/bin` always tracks
+> the repo:
+>
+> ```sh
+> for f in claude-resume clauding-snapshot zellij_restore; do
+>   ln -sf "$PWD/$f" ~/bin/"$f"
+> done
+> ```
+>
+> (If you do keep copies, remember to re-`cp` after every update.)
+
+```sh
 # ...work across many sessions...
 
 # right before you reboot, photograph the live session:
