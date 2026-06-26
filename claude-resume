@@ -8,6 +8,11 @@
 #   claude-resume --id <ID>    resume one exact session id (used by generated layouts)
 #   claude-resume --list       print the candidate table and exit
 #   claude-resume --dir <DIR>  operate on DIR instead of $PWD
+#   claude-resume --drop-to-shell  when claude exits, drop into an interactive login
+#                              shell instead of letting the process end — so a restored
+#                              zellij pane lands in a shell, not zellij's held
+#                              "<ENTER> re-run / <ESC> drop to shell" command-pane prompt
+#                              (clauding-snapshot bakes this into restore layouts)
 #
 # Sessions are read from ~/.claude/projects/<encoded-cwd>/<id>.jsonl
 # (honors $CLAUDE_CONFIG_DIR). Picker is keyed by git branch + last activity
@@ -22,6 +27,7 @@ CLAUDE_FLAGS=( --dangerously-skip-permissions )  # your standard flags
 
 cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; proj="$cfg/projects"
 mode="auto"; target="$PWD"; want_id=""; want_effort="${CLAUDE_RESUME_EFFORT:-}"
+drop_to_shell="${CLAUDE_RESUME_DROP_TO_SHELL:-}"
 while [ $# -gt 0 ]; do case "$1" in
   --latest) mode="latest";;
   --pick)   mode="pick";;
@@ -29,6 +35,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --id)     shift; want_id="$1"; mode="id";;
   --dir)    shift; target="$1";;
   --effort) shift; want_effort="$1";;
+  --drop-to-shell) drop_to_shell=1;;
   *) echo "claude-resume: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
 
@@ -38,6 +45,20 @@ esac; shift; done
 # Empty = let claude use the default. (bash-3.2 + set -u safe: expand only when set.)
 eff=()
 [ -n "$want_effort" ] && eff=(--effort "$want_effort")
+
+# Launch claude. Normally we exec (replace this process) so claude IS the pane's
+# command. With --drop-to-shell we instead run claude as a child and then exec an
+# interactive login shell, so when claude exits the pane lands in a normal shell
+# rather than zellij's held "<ENTER> re-run / <ESC> drop to shell" command-pane
+# prompt (the pane was launched from a layout with command="claude-resume").
+run_claude() {
+  if [ -n "$drop_to_shell" ]; then
+    env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "$@" || true   # || true: don't let set -e skip the shell
+    exec "${SHELL:-/bin/zsh}" -il
+  else
+    exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "$@"
+  fi
+}
 
 encode_cwd() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
@@ -51,14 +72,14 @@ launch_id() {
   rec="$(jq -r 'select(.cwd!=null)|.cwd' "$file" 2>/dev/null | head -1)"
   [ -n "$rec" ] && [ -d "$rec" ] && cd "$rec"
   if [ -n "${CLAUDE_RESUME_DRYRUN:-}" ]; then
-    echo "[dryrun] (cd $(pwd)) env ${CLAUDE_ENV[*]} $CLAUDE_BIN ${CLAUDE_FLAGS[*]} ${want_effort:+--effort $want_effort} --resume $id"; exit 0
+    echo "[dryrun] (cd $(pwd)) env ${CLAUDE_ENV[*]} $CLAUDE_BIN ${CLAUDE_FLAGS[*]} ${want_effort:+--effort $want_effort} --resume $id${drop_to_shell:+ ; exec ${SHELL:-/bin/zsh} -il}"; exit 0
   fi
-  exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"} --resume "$id"
+  run_claude "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"} --resume "$id"
 }
 
 [ "$mode" = "id" ] && launch_id "$want_id"
 
-[ -d "$proj" ] || { echo "no $proj — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
+[ -d "$proj" ] || { echo "no $proj — starting fresh" >&2; run_claude "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
 
 collect_files() {
   local enc dir; enc="$(encode_cwd "$target")"; dir="$proj/$enc"
@@ -68,7 +89,7 @@ collect_files() {
 }
 files=()
 while IFS= read -r _f; do [ -n "$_f" ] && files+=("$_f"); done < <(collect_files)
-[ ${#files[@]} -gt 0 ] || { echo "no sessions for $target — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
+[ ${#files[@]} -gt 0 ] || { echo "no sessions for $target — starting fresh" >&2; run_claude "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
 
 rows=""
 for f in "${files[@]}"; do

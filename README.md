@@ -80,6 +80,7 @@ claude-resume --id <ID>    resume one exact session id (used by generated layout
 claude-resume --list       print the candidate table and exit
 claude-resume --dir <DIR>  operate on DIR instead of $PWD
 claude-resume --effort <L> launch at effort L (low|medium|high|xhigh|max), non-persisting
+claude-resume --drop-to-shell  on claude's exit, drop into a shell instead of ending
 ```
 
 Sessions are read from `~/.claude/projects/<encoded-cwd>/<id>.jsonl` (honoring `$CLAUDE_CONFIG_DIR`). The picker lists candidates keyed by **last activity**, **git branch**, and **first prompt**, so you can recognize a session without ever having named it — and it works after a crash.
@@ -94,6 +95,19 @@ If there are no sessions for the target directory, it simply starts a fresh `cla
 **non-persisting** `--effort` flag to `claude --resume`, so a restored pane wakes at a
 chosen reasoning level **without** overwriting your saved global default (`effortLevel`
 in `settings.json`). `clauding-snapshot` bakes this per-pane automatically — see below.
+
+### Dropping to a shell on exit
+
+A pane launched from a zellij layout with a `command` is **held** when that command
+exits — zellij shows a `<ENTER> re-run / <ESC> drop to shell / <Ctrl-c> exit` prompt
+rather than returning you to a shell. For a restored Claude pane that means quitting
+Claude leaves you at that prompt instead of a normal terminal.
+
+`--drop-to-shell` fixes this: instead of `exec`-ing Claude (which makes Claude *be* the
+pane's command), it runs Claude as a child and then `exec`s an interactive login shell
+(`$SHELL`, falling back to `/bin/zsh`). So when you quit Claude the pane lands in a
+fresh shell — and only when you exit *that* shell does the held prompt appear.
+`clauding-snapshot` bakes this in by default (disable with `--no-drop-shell`).
 
 ### The launch line lives in one place
 
@@ -126,6 +140,7 @@ clauding-snapshot -o FILE         choose the output path
 clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 clauding-snapshot --suspend       keep panes start_suspended (press Enter to resume each)
 clauding-snapshot --no-effort     don't bake per-pane --effort into the layout
+clauding-snapshot --no-drop-shell restored claude panes don't drop to a shell on exit
 ```
 
 It creates the output directory if needed, prints a per-directory summary of which session each pane was bound to, and ends with the exact restore command:
@@ -163,6 +178,13 @@ every pane comes back at the exact reasoning level it had, **without** touching 
 global default. Panes with no recorded effort fall back to that default; ultracode panes
 record as `xhigh` and restore there (there is no `--effort ultracode`). Disable the whole
 behavior with `--no-effort` (or `CLAUDING_NO_EFFORT=1`).
+
+### Exiting a restored pane drops to a shell
+
+Restored Claude panes get `--drop-to-shell` baked in by default, so quitting Claude
+lands you in a normal shell instead of zellij's held `<ENTER> re-run / <ESC> drop to
+shell` command-pane prompt (see [Dropping to a shell on exit](#dropping-to-a-shell-on-exit)).
+Disable with `--no-drop-shell` (or `CLAUDING_NO_DROP_SHELL=1`).
 
 ---
 
@@ -202,7 +224,9 @@ behavior with `--no-effort` (or `CLAUDING_NO_EFFORT=1`).
 | `CLAUDE_RESUME_BIN` | `clauding-snapshot` | Path to `claude-resume` to bake into the layout (default: PATH lookup, then `~/bin/claude-resume`). |
 | `CLAUDE_RESUME_DRYRUN` | `claude-resume` | If set, print the launch command instead of running it. |
 | `CLAUDE_RESUME_EFFORT` | `claude-resume` | Default effort to launch at when `--effort` isn't passed (`low`/`medium`/`high`/`xhigh`/`max`). Non-persisting (doesn't change `effortLevel`). |
+| `CLAUDE_RESUME_DROP_TO_SHELL` | `claude-resume` | If set, drop into an interactive shell when Claude exits (same as `--drop-to-shell`). |
 | `CLAUDING_NO_EFFORT` | `clauding-snapshot` | If set, don't bake per-pane `--effort` into the generated layout. |
+| `CLAUDING_NO_DROP_SHELL` | `clauding-snapshot` | If set, don't bake `--drop-to-shell` into restored panes (they'll show zellij's held prompt on exit). |
 
 The environment and flags applied at launch (`CLAUDE_ENV`, `CLAUDE_FLAGS`) are edited directly at the top of `claude-resume`.
 

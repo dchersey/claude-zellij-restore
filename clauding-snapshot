@@ -23,12 +23,18 @@
 #   clauding-snapshot --no-stealth    trust dump-layout; skip the MCP-masking recovery heuristic
 #                                     (also via CLAUDING_NO_STEALTH=1, or automatically on a zellij
 #                                      release that includes the dump-layout fix — see below)
+#   clauding-snapshot --no-drop-shell  restored claude panes do NOT drop to a shell on exit
+#                                     (default: they DO — each baked claude-resume gets
+#                                      --drop-to-shell, so exiting claude lands you in a shell
+#                                      instead of zellij's held "<ENTER> re-run / <ESC> drop to
+#                                      shell" command-pane prompt; also via CLAUDING_NO_DROP_SHELL=1)
 set -eu
 out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
 [ -n "${CLAUDING_RUN_ALL:-}" ] && run_all=1
 no_stealth=0; [ -n "${CLAUDING_NO_STEALTH:-}" ] && no_stealth=1
 keep_swap=0; [ -n "${CLAUDING_KEEP_SWAP_LAYOUTS:-}" ] && keep_swap=1
 no_effort=0; [ -n "${CLAUDING_NO_EFFORT:-}" ] && no_effort=1
+drop_shell=1; [ -n "${CLAUDING_NO_DROP_SHELL:-}" ] && drop_shell=0
 while [ $# -gt 0 ]; do case "$1" in
   -o) shift; out="$1";;
   --from) shift; src="$1";;
@@ -37,6 +43,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --keep-swap-layouts) keep_swap=1;;
   --no-stealth) no_stealth=1;;
   --no-effort) no_effort=1;;
+  --no-drop-shell) drop_shell=0;;
   *) echo "clauding-snapshot: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
 
@@ -62,7 +69,7 @@ if [ -n "$src" ]; then cp "$src" "$tmp"; else zellij action dump-layout > "$tmp"
 mkdir -p "$(dirname "$out")"
 
 RESUME_BIN="${CLAUDE_RESUME_BIN:-$(command -v claude-resume 2>/dev/null || echo "$HOME/bin/claude-resume")}"
-SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" KEEP_SWAP="$keep_swap" NO_EFFORT="$no_effort" EFFORT_DIR="$HOME/.cache/claude-effort" SELF="$(basename "$0")" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
+SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" KEEP_SWAP="$keep_swap" NO_EFFORT="$no_effort" DROP_SHELL="$drop_shell" EFFORT_DIR="$HOME/.cache/claude-effort" SELF="$(basename "$0")" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
 import sys, os, re, glob, json, subprocess
 dump = open(sys.argv[1]).read().split('\n')
 proj = os.environ["PROJ"]; keep_suspend = os.environ["SUSPEND"] == "1"
@@ -70,6 +77,7 @@ run_all = os.environ.get("RUN_ALL") == "1"
 no_stealth = os.environ.get("NO_STEALTH") == "1"
 keep_swap = os.environ.get("KEEP_SWAP") == "1"
 no_effort = os.environ.get("NO_EFFORT") == "1"
+drop_shell = os.environ.get("DROP_SHELL") == "1"
 effort_dir = os.environ.get("EFFORT_DIR", "")
 _VALID_EFFORT = {"low", "medium", "high", "xhigh", "max"}
 def effort_of(sid):
@@ -279,10 +287,11 @@ while i < len(dump):
             else:
                 src = 'stealth' if sid else 'pick'
             report.append((cwd, sid, src, eff))
+            ds = ' "--drop-to-shell"' if drop_shell else ''
             if sid:
-                arg = f'{indent}    args "--id" "{sid}"' + (f' "--effort" "{eff}"' if eff else '')
+                arg = f'{indent}    args "--id" "{sid}"' + (f' "--effort" "{eff}"' if eff else '') + ds
             else:
-                arg = f'{indent}    args "--pick"'
+                arg = f'{indent}    args "--pick"' + ds
             if ln.rstrip().endswith('{'):
                 inner, close, j = gather_block(i)
                 kept = [b for b in inner
