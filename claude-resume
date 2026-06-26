@@ -21,15 +21,23 @@ CLAUDE_FLAGS=( --dangerously-skip-permissions )  # your standard flags
 # -------------------------------------------------------------------------
 
 cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; proj="$cfg/projects"
-mode="auto"; target="$PWD"; want_id=""
+mode="auto"; target="$PWD"; want_id=""; want_effort="${CLAUDE_RESUME_EFFORT:-}"
 while [ $# -gt 0 ]; do case "$1" in
   --latest) mode="latest";;
   --pick)   mode="pick";;
   --list)   mode="list";;
   --id)     shift; want_id="$1"; mode="id";;
   --dir)    shift; target="$1";;
+  --effort) shift; want_effort="$1";;
   *) echo "claude-resume: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
+
+# Per-session effort: from --effort (baked into generated layouts by clauding-snapshot)
+# or $CLAUDE_RESUME_EFFORT. Passed to claude as the NON-persisting --effort flag, so a
+# restored pane wakes at its captured level without touching the saved global default.
+# Empty = let claude use the default. (bash-3.2 + set -u safe: expand only when set.)
+eff=()
+[ -n "$want_effort" ] && eff=(--effort "$want_effort")
 
 encode_cwd() { printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'; }
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
@@ -43,14 +51,14 @@ launch_id() {
   rec="$(jq -r 'select(.cwd!=null)|.cwd' "$file" 2>/dev/null | head -1)"
   [ -n "$rec" ] && [ -d "$rec" ] && cd "$rec"
   if [ -n "${CLAUDE_RESUME_DRYRUN:-}" ]; then
-    echo "[dryrun] (cd $(pwd)) env ${CLAUDE_ENV[*]} $CLAUDE_BIN ${CLAUDE_FLAGS[*]} --resume $id"; exit 0
+    echo "[dryrun] (cd $(pwd)) env ${CLAUDE_ENV[*]} $CLAUDE_BIN ${CLAUDE_FLAGS[*]} ${want_effort:+--effort $want_effort} --resume $id"; exit 0
   fi
-  exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" --resume "$id"
+  exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"} --resume "$id"
 }
 
 [ "$mode" = "id" ] && launch_id "$want_id"
 
-[ -d "$proj" ] || { echo "no $proj — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}"; }
+[ -d "$proj" ] || { echo "no $proj — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
 
 collect_files() {
   local enc dir; enc="$(encode_cwd "$target")"; dir="$proj/$enc"
@@ -60,7 +68,7 @@ collect_files() {
 }
 files=()
 while IFS= read -r _f; do [ -n "$_f" ] && files+=("$_f"); done < <(collect_files)
-[ ${#files[@]} -gt 0 ] || { echo "no sessions for $target — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}"; }
+[ ${#files[@]} -gt 0 ] || { echo "no sessions for $target — starting fresh" >&2; exec env "${CLAUDE_ENV[@]}" "$CLAUDE_BIN" "${CLAUDE_FLAGS[@]}" ${eff[@]+"${eff[@]}"}; }
 
 rows=""
 for f in "${files[@]}"; do

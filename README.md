@@ -64,6 +64,7 @@ claude-resume --pick       always show the picker
 claude-resume --id <ID>    resume one exact session id (used by generated layouts)
 claude-resume --list       print the candidate table and exit
 claude-resume --dir <DIR>  operate on DIR instead of $PWD
+claude-resume --effort <L> launch at effort L (low|medium|high|xhigh|max), non-persisting
 ```
 
 Sessions are read from `~/.claude/projects/<encoded-cwd>/<id>.jsonl` (honoring `$CLAUDE_CONFIG_DIR`). The picker lists candidates keyed by **last activity**, **git branch**, and **first prompt**, so you can recognize a session without ever having named it — and it works after a crash.
@@ -71,6 +72,13 @@ Sessions are read from `~/.claude/projects/<encoded-cwd>/<id>.jsonl` (honoring `
 When you resume by id, `claude-resume` reads the session's own recorded `cwd` and `cd`s there before launching, so a pane started in the wrong directory still lands in the right project.
 
 If there are no sessions for the target directory, it simply starts a fresh `claude`.
+
+### Preserving effort level
+
+`--effort <level>` (or the `CLAUDE_RESUME_EFFORT` env var) forwards Claude Code's
+**non-persisting** `--effort` flag to `claude --resume`, so a restored pane wakes at a
+chosen reasoning level **without** overwriting your saved global default (`effortLevel`
+in `settings.json`). `clauding-snapshot` bakes this per-pane automatically — see below.
 
 ### The launch line lives in one place
 
@@ -102,6 +110,7 @@ clauding-snapshot                 dump current session -> ~/tmp/clauding-restore
 clauding-snapshot -o FILE         choose the output path
 clauding-snapshot --from DUMP     rewrite an existing dump file (no zellij call)
 clauding-snapshot --suspend       keep panes start_suspended (press Enter to resume each)
+clauding-snapshot --no-effort     don't bake per-pane --effort into the layout
 ```
 
 It creates the output directory if needed, prints a per-directory summary of which session each pane was bound to, and ends with the exact restore command:
@@ -128,6 +137,17 @@ through to `clauding-snapshot --from`, which re-shapes the saved layout before l
 — so a snapshot taken with command panes suspended can be restored with them running.
 
 This pairs with per-session snapshots like `clauding-snapshot -o ~/tmp/clauding-restore-$ZELLIJ_SESSION_NAME.kdl` (e.g. the [claude-watch](https://github.com/dchersey/claude-code-notify-watch) auto-snapshot hook), so each session restores independently.
+
+### Per-pane effort is preserved
+
+If you run the effort-coloring statusline from
+[claude-effort-borders](https://github.com/dchersey/zellij/tree/integration/contrib/claude-effort-borders)
+— which exports each session's current effort to `~/.cache/claude-effort/<id>` —
+`clauding-snapshot` bakes `--effort <level>` into each pane's `claude-resume` line, so
+every pane comes back at the exact reasoning level it had, **without** touching your saved
+global default. Panes with no recorded effort fall back to that default; ultracode panes
+record as `xhigh` and restore there (there is no `--effort ultracode`). Disable the whole
+behavior with `--no-effort` (or `CLAUDING_NO_EFFORT=1`).
 
 ---
 
@@ -166,6 +186,8 @@ This pairs with per-session snapshots like `clauding-snapshot -o ~/tmp/clauding-
 | `CLAUDE_CONFIG_DIR` | both | Root of the Claude config; sessions are read from `$CLAUDE_CONFIG_DIR/projects` (default `~/.claude`). |
 | `CLAUDE_RESUME_BIN` | `clauding-snapshot` | Path to `claude-resume` to bake into the layout (default: PATH lookup, then `~/bin/claude-resume`). |
 | `CLAUDE_RESUME_DRYRUN` | `claude-resume` | If set, print the launch command instead of running it. |
+| `CLAUDE_RESUME_EFFORT` | `claude-resume` | Default effort to launch at when `--effort` isn't passed (`low`/`medium`/`high`/`xhigh`/`max`). Non-persisting (doesn't change `effortLevel`). |
+| `CLAUDING_NO_EFFORT` | `clauding-snapshot` | If set, don't bake per-pane `--effort` into the generated layout. |
 
 The environment and flags applied at launch (`CLAUDE_ENV`, `CLAUDE_FLAGS`) are edited directly at the top of `claude-resume`.
 

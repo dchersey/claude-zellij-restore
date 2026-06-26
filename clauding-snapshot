@@ -28,6 +28,7 @@ out="$HOME/tmp/clauding-restore.kdl"; src=""; suspend=0; run_all=0
 [ -n "${CLAUDING_RUN_ALL:-}" ] && run_all=1
 no_stealth=0; [ -n "${CLAUDING_NO_STEALTH:-}" ] && no_stealth=1
 keep_swap=0; [ -n "${CLAUDING_KEEP_SWAP_LAYOUTS:-}" ] && keep_swap=1
+no_effort=0; [ -n "${CLAUDING_NO_EFFORT:-}" ] && no_effort=1
 while [ $# -gt 0 ]; do case "$1" in
   -o) shift; out="$1";;
   --from) shift; src="$1";;
@@ -35,6 +36,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --run-all) run_all=1;;
   --keep-swap-layouts) keep_swap=1;;
   --no-stealth) no_stealth=1;;
+  --no-effort) no_effort=1;;
   *) echo "clauding-snapshot: unknown arg: $1" >&2; exit 2;;
 esac; shift; done
 
@@ -60,13 +62,26 @@ if [ -n "$src" ]; then cp "$src" "$tmp"; else zellij action dump-layout > "$tmp"
 mkdir -p "$(dirname "$out")"
 
 RESUME_BIN="${CLAUDE_RESUME_BIN:-$(command -v claude-resume 2>/dev/null || echo "$HOME/bin/claude-resume")}"
-SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" KEEP_SWAP="$keep_swap" SELF="$(basename "$0")" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
+SUSPEND="$suspend" RUN_ALL="$run_all" NO_STEALTH="$no_stealth" KEEP_SWAP="$keep_swap" NO_EFFORT="$no_effort" EFFORT_DIR="$HOME/.cache/claude-effort" SELF="$(basename "$0")" PROJ="$proj" RESUME_BIN="$RESUME_BIN" SESS_DIR="$cfg/sessions" ZJ_SESSION="${ZELLIJ_SESSION_NAME:-}" python3 - "$tmp" > "$out" <<'PY'
 import sys, os, re, glob, json, subprocess
 dump = open(sys.argv[1]).read().split('\n')
 proj = os.environ["PROJ"]; keep_suspend = os.environ["SUSPEND"] == "1"
 run_all = os.environ.get("RUN_ALL") == "1"
 no_stealth = os.environ.get("NO_STEALTH") == "1"
 keep_swap = os.environ.get("KEEP_SWAP") == "1"
+no_effort = os.environ.get("NO_EFFORT") == "1"
+effort_dir = os.environ.get("EFFORT_DIR", "")
+_VALID_EFFORT = {"low", "medium", "high", "xhigh", "max"}
+def effort_of(sid):
+    # Per-session effort, exported by the statusline to EFFORT_DIR/<sid>. Baked into the
+    # restore layout as `--effort <level>` so the pane wakes at its captured level
+    # (without touching the saved global default). None -> omit the flag.
+    if no_effort or not (effort_dir and sid): return None
+    try:
+        v = open(os.path.join(effort_dir, sid)).read().strip()
+    except Exception:
+        return None
+    return v if v in _VALID_EFFORT else None
 resume_bin = os.environ["RESUME_BIN"]
 self_name = os.environ.get("SELF", "clauding-snapshot")  # this script's own basename
 
@@ -258,12 +273,16 @@ while i < len(dump):
             opener = cmd_re.sub('command="%s"' % resume_bin, ln, count=1)
             opener = re.sub(r'\s+name="cc:[^"]*"', '', opener)
             sid = take(cwd)
+            eff = effort_of(sid) if sid else None
             if claude_here:
                 src = 'live' if (sid and sid in live_ids(cwd)) else ('mtime' if sid else 'pick')
             else:
                 src = 'stealth' if sid else 'pick'
-            report.append((cwd, sid, src))
-            arg = f'{indent}    args "--id" "{sid}"' if sid else f'{indent}    args "--pick"'
+            report.append((cwd, sid, src, eff))
+            if sid:
+                arg = f'{indent}    args "--id" "{sid}"' + (f' "--effort" "{eff}"' if eff else '')
+            else:
+                arg = f'{indent}    args "--pick"'
             if ln.rstrip().endswith('{'):
                 inner, close, j = gather_block(i)
                 kept = [b for b in inner
@@ -292,9 +311,11 @@ sys.stdout.write(hdr + '\n'.join(out))
 sys.stderr.write("clauding-snapshot: rewrote %d claude pane(s)\n" % len(report))
 if report_self:
     sys.stderr.write("  + replaced %d clauding-snapshot launcher pane(s) with a plain shell\n" % report_self)
-for cwd in sorted(set(c for c, _s, _src in report)):
-    items = [(s, src) for c, s, src in report if c == cwd]
-    rendered = ", ".join(("%s[%s]" % (s[:8], src) if s else "PICK") for s, src in items)
+for cwd in sorted(set(c for c, _s, _src, _e in report)):
+    items = [(s, src, e) for c, s, src, e in report if c == cwd]
+    rendered = ", ".join(
+        (("%s[%s%s]" % (s[:8], src, ("," + e) if e else "")) if s else "PICK")
+        for s, src, e in items)
     sys.stderr.write("  %-45s -> %s\n" % (cwd, rendered))
 PY
 abs_out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
